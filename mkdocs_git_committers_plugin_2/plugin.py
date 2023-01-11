@@ -1,5 +1,7 @@
 import os
 import sys
+import fnmatch
+from typing import List
 import logging
 from pprint import pprint
 from timeit import default_timer as timer
@@ -26,6 +28,8 @@ class GitCommittersPlugin(BasePlugin):
         ('repository', config_options.Type(str, default='')),
         ('branch', config_options.Type(str, default='master')),
         ('docs_path', config_options.Type(str, default='docs/')),
+        ('token', config_options.Type(str, default='')),
+        ('exclude', config_options.Type(list, default=[])),
         ('enabled', config_options.Type(bool, default=True)),
         ('cache_dir', config_options.Type(str, default='.cache/plugin/git-committers')),
     )
@@ -74,6 +78,7 @@ class GitCommittersPlugin(BasePlugin):
             if self.cache_date and time.strptime(last_commit_date, "%Y-%m-%d") < time.strptime(self.cache_date, "%Y-%m-%d"):
                 return self.cache_page_authors[path]['authors'], self.cache_page_authors[path]['last_commit_date']
 
+        path = path.replace('\\', '/')
         url_contribs = self.githuburl + self.config['repository'] + "/contributors-list/" + self.config['branch'] + "/" + path
         LOG.info("git-committers: fetching contributors for " + path)
         LOG.debug("   from " + url_contribs)
@@ -105,6 +110,10 @@ class GitCommittersPlugin(BasePlugin):
         return authors, last_commit_date
 
     def on_page_context(self, context, page, config, nav):
+        excluded_pages = self.config.get('exclude', [])
+        if exclude(page.file.src_path, excluded_pages):
+            return context
+        
         context['committers'] = []
         if not self.enabled:
             return context
@@ -119,6 +128,44 @@ class GitCommittersPlugin(BasePlugin):
         self.total_time += (end - start)
 
         return context
+
+"""
+Code from https://github.com/timvink/mkdocs-git-authors-plugin/blob/master/mkdocs_git_authors_plugin/exclude.py
+"""
+def exclude(src_path: str, globs: List[str]) -> bool:
+    """
+    Determine if a src_path should be excluded.
+    Supports globs (e.g. folder/* or *.md).
+    Credits: code inspired by / adapted from
+    https://github.com/apenwarr/mkdocs-exclude/blob/master/mkdocs_exclude/plugin.py
+    Args:
+        src_path (src): Path of file
+        globs (list): list of globs
+    Returns:
+        (bool): whether src_path should be excluded
+    """
+    assert isinstance(src_path, str)
+    assert isinstance(globs, list)
+
+    for g in globs:
+        if fnmatch.fnmatchcase(src_path, g):
+            return True
+
+        # Windows reports filenames as eg.  a\\b\\c instead of a/b/c.
+        # To make the same globs/regexes match filenames on Windows and
+        # other OSes, let's try matching against converted filenames.
+        # On the other hand, Unix actually allows filenames to contain
+        # literal \\ characters (although it is rare), so we won't
+        # always convert them.  We only convert if os.sep reports
+        # something unusual.  Conversely, some future mkdocs might
+        # report Windows filenames using / separators regardless of
+        # os.sep, so we *always* test with / above.
+        if os.sep != "/":
+            src_path_fix = src_path.replace(os.sep, "/")
+            if fnmatch.fnmatchcase(src_path_fix, g):
+                return True
+
+    return False
 
     def on_post_build(self, config):
         LOG.info("git-committers: saving page authors cache file")
